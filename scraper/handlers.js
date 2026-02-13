@@ -19,20 +19,23 @@ async function handleMessage(message) {
         // Attach resolved name to message for store.js
         message._senderName = senderName;
 
-        // Resolve Mentions (if any)
+        // Resolve Mentions (improve body by replacing @number with @name)
         try {
-            const mentions = await message.getMentions();
-            if (mentions && mentions.length > 0) {
-                for (const mention of mentions) {
-                    const mentionName = mention.pushname || mention.name || mention.shortName || mention.number;
-                    const mentionId = mention.number; // The number without @c.us
-
-                    // Replace @number with @name
-                    // We use a global regex to replace all occurrences
-                    const regex = new RegExp(`@${mentionId}`, 'g');
-                    message.body = message.body.replace(regex, `@${mentionName}`);
+            const mentionMatches = message.body.match(/@\d+/g);
+            if (mentionMatches) {
+                for (const mentionStr of mentionMatches) {
+                    const number = mentionStr.substring(1);
+                    const contactId = `${number}@c.us`;
+                    try {
+                        const mentionedContact = await message.client.getContactById(contactId);
+                        const mentionName = mentionedContact.pushname || mentionedContact.name || mentionedContact.shortName || number;
+                        const regex = new RegExp(mentionStr, 'g');
+                        message.body = message.body.replace(regex, `@${mentionName}`);
+                        console.log(`Resolved mention: ${mentionStr} -> @${mentionName}`);
+                    } catch (contactErr) {
+                        console.warn(`Could not resolve contact for mention: ${mentionStr}`);
+                    }
                 }
-                console.log(`Resolved ${mentions.length} mentions in message.`);
             }
         } catch (err) {
             console.error('Error resolving mentions:', err);
