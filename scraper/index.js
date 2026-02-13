@@ -18,14 +18,11 @@ const client = new Client({
             '--disable-gpu'
         ],
     },
-    // Using a remote cache can help, but sometimes latest is better. 
-    // Commenting out to retry default behavior or use a known stable if this fails.
-    /*
+    // Using a remote cache to prevent "detached Frame" errors with latest WA Web
     webVersionCache: {
         type: 'remote',
         remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
     }
-    */
 });
 
 client.on('qr', (qr) => {
