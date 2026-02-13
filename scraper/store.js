@@ -12,17 +12,60 @@ if (!supabaseUrl || !supabaseKey) {
 
 const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
 
+// Cache for user_id to avoid repeated lookups
+let cachedUserId = null;
+
+async function getUserId() {
+    if (cachedUserId) return cachedUserId;
+
+    if (!supabase) return null;
+
+    const ownerEmail = process.env.SCRAPER_OWNER_EMAIL;
+    if (!ownerEmail) {
+        console.warn('⚠️ SCRAPER_OWNER_EMAIL not set in .env. Messages will be saved without user_id.');
+        return null;
+    }
+
+    // Since we are using service_role key, we can access auth.users via admin api but 
+    // supabase-js client doesn't expose auth.users table directly for select usually unless 
+    // configured. 
+    // However, with service_role we can use getUserByEmail if we had the admin auth client,
+    // or just raw select if we have permissions.
+    // Let's try raw select wrapper or admin.listUsers.
+
+    // Better approach with service role:
+    const { data, error } = await supabase.auth.admin.listUsers();
+
+    if (error) {
+        console.error('❌ Error fetching users:', error);
+        return null;
+    }
+
+    const user = data.users.find(u => u.email === ownerEmail);
+    if (user) {
+        console.log(`✅ Found user_id for ${ownerEmail}: ${user.id}`);
+        cachedUserId = user.id;
+        return user.id;
+    } else {
+        console.warn(`⚠️ User with email ${ownerEmail} not found in Supabase.`);
+        return null;
+    }
+}
+
 async function saveMessage(message, chat) {
     if (!supabase) return;
 
     const { body, from, timestamp, author } = message;
 
     // Ensure group exists
+    const userId = await getUserId();
+
     const { error: groupError } = await supabase
         .from('groups')
         .upsert({
             id: chat.id._serialized,
-            name: chat.name
+            name: chat.name,
+            user_id: userId
         }, { onConflict: 'id' });
 
     if (groupError) {
@@ -41,7 +84,8 @@ async function saveMessage(message, chat) {
             group_id: chat.id._serialized,
             sender: senderName,
             content: body,
-            timestamp: new Date(timestamp * 1000).toISOString()
+            timestamp: new Date(timestamp * 1000).toISOString(),
+            user_id: userId
         });
 
     if (msgError) {
