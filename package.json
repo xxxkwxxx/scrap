@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start -p 3001",
     "lint": "next lint",
-    "scraper": "node scraper/index.js"
+    "scraper": "bash scraper/run_continuously.sh"
   },
   "dependencies": {
     "@google/generative-ai": "^0.21.0",
