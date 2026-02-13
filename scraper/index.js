@@ -14,7 +14,7 @@ const client = new Client({
             '--disable-accelerated-2d-canvas',
             '--no-first-run',
             '--no-zygote',
-            '--single-process', // Helps with stability in some envs
+            '--disable-extensions',
             '--disable-gpu'
         ],
     },
@@ -76,7 +76,12 @@ setInterval(async () => {
             console.log('💓 Heartbeat: Client NOT connected yet.');
         }
     } catch (err) {
-        console.log('💓 Heartbeat: Error checking state', err.message);
+        // "detached Frame" and "Execution context was destroyed" are normal Puppeteer noise 
+        // when WhatsApp Web reloads internal components. We silence them to keep logs clean.
+        const noise = ['detached Frame', 'Execution context was destroyed', 'Target closed', 'Session closed'];
+        if (!noise.some(msg => err.message.includes(msg))) {
+            console.log('💓 Heartbeat: Status check issue:', err.message);
+        }
     }
 }, 30000); // Check every 30 seconds
 
