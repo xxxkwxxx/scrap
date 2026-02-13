@@ -19,6 +19,25 @@ async function handleMessage(message) {
         // Attach resolved name to message for store.js
         message._senderName = senderName;
 
+        // Resolve Mentions (if any)
+        try {
+            const mentions = await message.getMentions();
+            if (mentions && mentions.length > 0) {
+                for (const mention of mentions) {
+                    const mentionName = mention.pushname || mention.name || mention.shortName || mention.number;
+                    const mentionId = mention.number; // The number without @c.us
+
+                    // Replace @number with @name
+                    // We use a global regex to replace all occurrences
+                    const regex = new RegExp(`@${mentionId}`, 'g');
+                    message.body = message.body.replace(regex, `@${mentionName}`);
+                }
+                console.log(`Resolved ${mentions.length} mentions in message.`);
+            }
+        } catch (err) {
+            console.error('Error resolving mentions:', err);
+        }
+
         console.log(`Received message from: ${senderName} (Chat: ${chat.name})`);
         await saveMessage(message, chat);
 
