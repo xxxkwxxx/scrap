@@ -40,12 +40,16 @@ export async function POST(req: Request) {
     try {
         const { groupId, sender, startDate, endDate } = await req.json()
 
+        // 1. Fetch group metadata first (to map IDs to Names)
+        const { data: groups } = await supabase.from('groups').select('*')
+        const groupMap = Object.fromEntries((groups || []).map(g => [g.id, g.name]))
+
         // Build query
         let query = supabase
             .from('messages')
             .select('sender, content, timestamp, group_id')
             .order('timestamp', { ascending: true })
-            .limit(200) // Increase limit for better summaries
+            .limit(1000) // Support a larger batch for summarization
 
         // Apply filters
         if (groupId && groupId !== 'all') {
@@ -74,24 +78,63 @@ export async function POST(req: Request) {
             return NextResponse.json({ message: 'No messages found to summarize for the selected criteria.' })
         }
 
-        // 2. Construct prompt
-        const messageText = messages
-            .map((m) => `[${new Date(m.timestamp).toLocaleString()}] ${m.sender} (${m.group_id ? 'Group' : 'DM'}): ${m.content}`)
-            .join('\n')
+        // 2. Group messages by chat and partition into Groups vs PMs
+        const groupChats: Record<string, any[]> = {}
+        const privateChats: Record<string, any[]> = {}
 
-        const prompt = `Summarize the following WhatsApp messages effectively. 
-        Context: The user has filtered these messages. 
-        Filters applied: 
-        - Group: ${groupId || 'All'}
-        - Sender: ${sender || 'All'}
-        - Date Range: ${startDate || 'Any'} to ${endDate || 'Any'}
+        messages.forEach(m => {
+            const chatId = m.group_id
+            const chatName = groupMap[chatId] || chatId || 'Unknown Chat'
 
-        Please provide a concise summary with bullet points, focusing on key discussions, decisions, and important information.
+            if (chatId && chatId.endsWith('@g.us')) {
+                if (!groupChats[chatName]) groupChats[chatName] = []
+                groupChats[chatName].push(m)
+            } else {
+                if (!privateChats[chatName]) privateChats[chatName] = []
+                privateChats[chatName].push(m)
+            }
+        })
+
+        const activeGroupCount = Object.keys(groupChats).length
+        const activePmCount = Object.keys(privateChats).length
+
+        // 3. Construct the strict prompt
+        const prompt = `
+        You are a highly efficient personal assistant. 
+        Your task is to provide a detailed summary of the WhatsApp messages below, strictly organized by their **Group Name** or **Contact Name**.
         
-        Messages:
-        ${messageText}`
+        MANDATORY FORMATTING RULES:
+        1. **HEADERS**: Every section MUST start with the Name of the group or person in BOLD (e.g., ### **468 - Project ER @ Chai Chee**).
+        2. **NO TOPICAL GROUPING**: Do not group by topics like "Cement" or "Operations". Summarize everything that happened in one chat under its own header.
+        3. **TEMPLATE PER CHAT**:
+           ### **[CHAT NAME]**
+           - **Who talked**: [Participants]
+           - **Summary**: [Detailed, bulleted recap of all events, decisions, and updates in this specific chat.]
+        
+        4. Split the output into two major sections:
+           ## 🏆 GROUP ACTIVITIES
+           ## 👤 PRIVATE CONVERSATIONS
 
-        // 3. Call Gemini with Key Rotation
+        DATA TO SUMMARIZE:
+        ---
+        ${activeGroupCount > 0 ? `## 🏆 GROUP ACTIVITIES\n${Object.entries(groupChats)
+                .sort((a, b) => b[0].localeCompare(a[0])) // Sort descending Z-A
+                .map(([name, msgs]) => `
+[GROUP NAME: ${name}]
+MESSAGES:
+${msgs.map(m => `(${new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}) ${m.sender}: ${m.content}`).join('\n')}
+        `).join('\n\n')}` : ""}
+
+        ${activePmCount > 0 ? `## 👤 PRIVATE CONVERSATIONS\n${Object.entries(privateChats)
+                .sort((a, b) => b[0].localeCompare(a[0])) // Sort descending Z-A
+                .map(([name, msgs]) => `
+[CHAT WITH: ${name}]
+MESSAGES:
+${msgs.map(m => `(${new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}) ${m.sender}: ${m.content}`).join('\n')}
+        `).join('\n\n')}` : ""}
+        `
+
+        // 4. Call Gemini with Key Rotation
         const keys = getGeminiKeys()
         if (keys.length === 0) {
             return NextResponse.json({ error: 'No Gemini API keys configured' }, { status: 500 })
@@ -99,11 +142,6 @@ export async function POST(req: Request) {
 
         const summaryText = await generateWithRetry(prompt, keys)
 
-        // 4. Save Summary (Optional: for now just return it, or save to a different table if needed. 
-        // The existing 'summaries' table is linked to group_id, which might be null here. 
-        // For this feature, returning the summary directly to the UI is often better for ad-hoc queries.)
-
-        // We will return it directly for the new "Summarize Tab" usage.
         return NextResponse.json({ success: true, summary: summaryText, count: messages.length })
 
     } catch (error: any) {

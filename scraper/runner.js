@@ -8,7 +8,10 @@ function runScraper() {
     console.log('🚀 Starting WhatsApp Scraper...');
 
     // Spawn the scraper process
-    const scraper = spawn('node', [SCRAPER_SCRIPT], {
+    // We wrap the path in quotes to handle spaces in directory names
+    // Pre-cleanup: Kill any orphaned scraper processes to avoid session locks / duplicates
+    const pkillPrefix = 'pkill -f "node .*scraper/index.js" || true';
+    const scraper = spawn(`${pkillPrefix} && node`, [`"${SCRAPER_SCRIPT}"`], {
         stdio: 'inherit', // Pipe output to parent
         shell: true       // Use shell for compatibility
     });

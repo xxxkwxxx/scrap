@@ -27,7 +27,10 @@ export default function Dashboard() {
     const [groups, setGroups] = useState<Group[]>([])
     const [loading, setLoading] = useState(true)
     const [searchTerm, setSearchTerm] = useState('')
+    const [filterType, setFilterType] = useState<'all' | 'others' | 'mine'>('all')
     const router = useRouter()
+
+    const ownerName = "Kw" // Fixed for now, could be dynamic from session/scraper status
 
     useEffect(() => {
         const checkUserAndFetchData = async () => {
@@ -95,8 +98,15 @@ export default function Dashboard() {
 
     const filteredMessages = messages.filter(msg => {
         const cleanSender = formatSender(msg.sender)
-        return msg.content.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        const content = msg.content || '' // Handle null/undefined content
+        const matchesSearch = content.toLowerCase().includes(searchTerm.toLowerCase()) ||
             cleanSender.toLowerCase().includes(searchTerm.toLowerCase())
+
+        if (!matchesSearch) return false
+
+        if (filterType === 'mine') return cleanSender === ownerName
+        if (filterType === 'others') return cleanSender !== ownerName
+        return true
     })
 
     if (!session) return null
@@ -195,10 +205,30 @@ export default function Dashboard() {
                 <div className="flex-1 overflow-y-auto p-4 md:p-8 scrollbar-thin scrollbar-thumb-white/10 hover:scrollbar-thumb-white/20">
 
                     <div className="max-w-4xl mx-auto space-y-6">
-                        <div className="flex items-center justify-between">
+                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                             <h2 className="text-2xl font-bold text-white">Live Feed</h2>
+                            <div className="flex items-center gap-1 bg-white/5 p-1 rounded-xl border border-white/10">
+                                <button
+                                    onClick={() => setFilterType('all')}
+                                    className={`px-4 py-1.5 text-xs font-medium rounded-lg transition-all ${filterType === 'all' ? 'bg-[#25D366] text-black shadow-lg shadow-[#25D366]/20' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}
+                                >
+                                    All
+                                </button>
+                                <button
+                                    onClick={() => setFilterType('others')}
+                                    className={`px-4 py-1.5 text-xs font-medium rounded-lg transition-all ${filterType === 'others' ? 'bg-[#25D366] text-black shadow-lg shadow-[#25D366]/20' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}
+                                >
+                                    Others
+                                </button>
+                                <button
+                                    onClick={() => setFilterType('mine')}
+                                    className={`px-4 py-1.5 text-xs font-medium rounded-lg transition-all ${filterType === 'mine' ? 'bg-[#25D366] text-black shadow-lg shadow-[#25D366]/20' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}
+                                >
+                                    Mine
+                                </button>
+                            </div>
                             <p className="text-sm text-gray-400">
-                                {messages.length > 0 ? `Showing ${messages.length} messages` : 'No messages'}
+                                {filteredMessages.length > 0 ? `Showing ${filteredMessages.length} messages` : 'No messages'}
                             </p>
                         </div>
 
@@ -253,9 +283,79 @@ export default function Dashboard() {
                                                     </div>
                                                 </div>
                                             </div>
-                                            <p className="text-gray-300 text-sm leading-relaxed whitespace-pre-wrap pl-13 ml-13">
-                                                {msg.content}
-                                            </p>
+                                            <div className="text-gray-300 text-sm leading-relaxed whitespace-pre-wrap pl-13 ml-13">
+                                                {(() => {
+                                                    const content = msg.content || '';
+
+                                                    const imageMatch = content.match(/\(Media: (https?:\/\/[^\s)]+)\)/) || content.match(/\[IMAGE\] (https?:\/\/[^\s]+)/);
+                                                    const videoMatch = content.match(/\[VIDEO\] (https?:\/\/[^\s]+)/);
+                                                    const audioMatch = content.match(/\[AUDIO\/VOICE MESSAGE\] (https?:\/\/[^\s]+)/);
+
+                                                    const cleanContent = content
+                                                        .replace(/\(Media: https?:\/\/[^\s)]+\)/, '')
+                                                        .replace(/\[IMAGE\] https?:\/\/[^\s]+/, '')
+                                                        .replace(/\[VIDEO\] https?:\/\/[^\s]+/, '')
+                                                        .replace(/\[AUDIO\/VOICE MESSAGE\] https?:\/\/[^\s]+/, '')
+                                                        .replace(/\[AUDIO\/VOICE MESSAGE\]/, '')
+                                                        .trim();
+
+                                                    return (
+                                                        <div className="space-y-2">
+                                                            {imageMatch && (
+                                                                <div className="mb-2 mt-1">
+                                                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                                                    <img
+                                                                        src={imageMatch[1]}
+                                                                        alt="Image"
+                                                                        className="max-w-xs md:max-w-sm rounded-lg border border-white/10 shadow-lg"
+                                                                        loading="lazy"
+                                                                    />
+                                                                </div>
+                                                            )}
+
+                                                            {videoMatch && (
+                                                                <div className="mb-2 mt-1">
+                                                                    <video
+                                                                        controls
+                                                                        className="max-w-xs md:max-w-sm rounded-lg border border-white/10 shadow-lg"
+                                                                        preload="metadata"
+                                                                    >
+                                                                        <source src={videoMatch[1]} />
+                                                                        Your browser does not support the video tag.
+                                                                    </video>
+                                                                </div>
+                                                            )}
+
+                                                            {audioMatch && (
+                                                                <div className="mb-2 mt-1">
+                                                                    <audio
+                                                                        controls
+                                                                        className="w-full max-w-xs"
+                                                                    >
+                                                                        <source src={audioMatch[1]} />
+                                                                        Your browser does not support the audio tag.
+                                                                    </audio>
+                                                                </div>
+                                                            )}
+
+                                                            {(cleanContent && cleanContent !== '[STICKER]' && cleanContent !== '[CALL LOG]') ? (
+                                                                <p className="text-gray-100 whitespace-pre-wrap break-words leading-relaxed text-[15px]">
+                                                                    {cleanContent}
+                                                                </p>
+                                                            ) : (
+                                                                <span className="text-gray-500 italic text-sm">
+                                                                    {imageMatch ? "Image attached" :
+                                                                        videoMatch ? "Video attached" :
+                                                                            audioMatch ? "Audio attached" :
+                                                                                msg.content?.includes('[STICKER]') ? "Sticker" :
+                                                                                    msg.content?.includes('[CALL LOG]') ? "Call Log" :
+                                                                                        "Empty message"}
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })()}
+                                            </div>
                                         </div>
                                     )
                                 })}

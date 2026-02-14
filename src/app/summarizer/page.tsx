@@ -3,7 +3,8 @@
 import { useEffect, useState, useMemo } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
-import { LogOut, MessageSquare, RefreshCw, Settings, Search, User, Users, Calendar, Sparkles, Layers, ArrowLeft } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import { LogOut, MessageSquare, RefreshCw, Settings, Search, User, Users, Calendar, Sparkles, Layers, ArrowLeft, Copy, Check, Clock } from 'lucide-react'
 import Link from 'next/link'
 import { Session } from '@supabase/supabase-js'
 
@@ -25,6 +26,9 @@ export default function SummarizerPage() {
     const [session, setSession] = useState<Session | null>(null)
     const [groups, setGroups] = useState<Group[]>([])
     const [messages, setMessages] = useState<Message[]>([])
+    const [copied, setCopied] = useState(false)
+    const [sending, setSending] = useState(false)
+    const [sendSuccess, setSendSuccess] = useState(false)
     // We fetch messages just to get unique senders for the filter dropdown
 
     // Filters
@@ -34,6 +38,7 @@ export default function SummarizerPage() {
     const [generatedSummary, setGeneratedSummary] = useState<string | null>(null)
     const [isGenerating, setIsGenerating] = useState(false)
     const [loading, setLoading] = useState(true)
+    const [isFromHistory, setIsFromHistory] = useState(false)
 
     const router = useRouter()
 
@@ -50,6 +55,37 @@ export default function SummarizerPage() {
         checkAuth()
     }, [])
 
+    const checkHistory = async () => {
+        if (!session) return
+
+        // Search for summary on this date for this group
+        let query = supabase
+            .from('summaries')
+            .select('*')
+            .eq('summary_date', summaryDate)
+            .eq('user_id', session.user.id)
+
+        if (summaryGroup !== 'all') {
+            query = query.eq('group_id', summaryGroup)
+        } else {
+            query = query.is('group_id', null)
+        }
+
+        const { data, error } = await query.maybeSingle()
+
+        if (data) {
+            setGeneratedSummary(data.summary)
+            setIsFromHistory(true)
+        } else {
+            setGeneratedSummary(null)
+            setIsFromHistory(false)
+        }
+    }
+
+    useEffect(() => {
+        checkHistory()
+    }, [summaryDate, summaryGroup, session])
+
     const fetchData = async () => {
         setLoading(true)
         const { data: grps } = await supabase
@@ -58,16 +94,13 @@ export default function SummarizerPage() {
 
         if (grps) setGroups(grps)
 
-        // Fetch recent messages to populate sender list
-        // In a real app with millions of messages, you'd use a robust search/filter API or distinct query
         const { data: msgs } = await supabase
             .from('messages')
             .select('sender')
             .order('timestamp', { ascending: false })
-            .limit(500) // Limit to recent 500 for sender suggestions
+            .limit(500)
 
         if (msgs) setMessages(msgs as any)
-
         setLoading(false)
     }
 
@@ -79,6 +112,7 @@ export default function SummarizerPage() {
     const handleSummarize = async () => {
         setIsGenerating(true)
         setGeneratedSummary(null)
+        setIsFromHistory(false)
         try {
             const res = await fetch('/api/summarize', {
                 method: 'POST',
@@ -92,7 +126,20 @@ export default function SummarizerPage() {
             })
             const data = await res.json()
             if (data.success) {
-                setGeneratedSummary(data.summary)
+                const summaryText = data.summary
+                setGeneratedSummary(summaryText)
+
+                // Save to history
+                if (session) {
+                    await supabase.from('summaries').insert({
+                        user_id: session.user.id,
+                        summary: summaryText,
+                        summary_date: summaryDate,
+                        group_id: summaryGroup === 'all' ? null : summaryGroup,
+                        start_date: new Date(summaryDate).toISOString(),
+                        end_date: new Date(new Date(summaryDate).getTime() + 86399999).toISOString()
+                    })
+                }
             } else {
                 alert('Summarization failed: ' + (data.message || data.error))
             }
@@ -104,7 +151,45 @@ export default function SummarizerPage() {
         }
     }
 
-    // Helper to format sender names (reused logic)
+    const handleCopy = () => {
+        if (!generatedSummary) return
+        navigator.clipboard.writeText(generatedSummary)
+        setCopied(true)
+        setTimeout(() => setCopied(false), 2000)
+    }
+
+    const handleSendToWhatsApp = async () => {
+        if (!generatedSummary) return
+        setSending(true)
+        try {
+            const ownerEmail = session?.user?.email || 'unknown';
+
+            const { error } = await supabase.from('scraper_commands').insert({
+                command: 'SEND_MESSAGE',
+                payload: {
+                    to: 'me',
+                    text: `🌟 *Summarizer Report*\n\n${generatedSummary}\n\n_Sent from Dashboard by ${ownerEmail}_`
+                }
+            })
+
+            if (error) {
+                if (error.code === '42P01') {
+                    alert('Database table "scraper_commands" is missing. Please run migrations.')
+                } else {
+                    alert('Failed to queue message: ' + error.message)
+                }
+                return
+            }
+
+            setSendSuccess(true)
+            setTimeout(() => setSendSuccess(false), 3000)
+        } catch (error: any) {
+            alert('Error: ' + error.message)
+        } finally {
+            setSending(false)
+        }
+    }
+
     const formatSender = (sender: string) => {
         let clean = sender.replace(/@s\.whatsapp\.net|@c\.us|@lid/g, '')
         const isRawId = /^\d{10,}$/.test(clean);
@@ -113,7 +198,7 @@ export default function SummarizerPage() {
     }
 
     const uniqueSenders = useMemo(() => {
-        const senders = new Set(messages.map(m => m.sender))
+        const senders = new Set(messages.map((m: any) => m.sender))
         return Array.from(senders)
     }, [messages])
 
@@ -141,7 +226,7 @@ export default function SummarizerPage() {
                     </div>
                 </div>
 
-                <div className="p-4 space-y-2 flex-1 overflow-y-auto">
+                <div className="p-4 space-y-2 flex-1 overflow-y-auto scrollbar-none">
                     <Link href="/" className="w-full flex items-center gap-3 px-3 py-2.5 text-sm rounded-xl transition-all duration-200 text-gray-400 hover:text-white hover:bg-white/5">
                         <Layers className="h-4 w-4" />
                         Live Messages
@@ -196,7 +281,7 @@ export default function SummarizerPage() {
                 </header>
 
                 <div className="flex-1 overflow-y-auto p-4 md:p-8 scrollbar-thin scrollbar-thumb-white/10 hover:scrollbar-thumb-white/20">
-                    <div className="max-w-5xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-8">
+                    <div className="max-w-5xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-8 pb-20">
                         {/* Controls */}
                         <div className="lg:col-span-1 space-y-6">
                             <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl p-6 sticky top-4">
@@ -225,27 +310,29 @@ export default function SummarizerPage() {
                                             className="w-full bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:border-[#4285F4]/50 focus:outline-none"
                                         >
                                             <option value="all">All Groups</option>
-                                            {groups.map(g => (
+                                            {groups.map((g: any) => (
                                                 <option key={g.id} value={g.id}>{g.name}</option>
                                             ))}
                                         </select>
                                     </div>
 
-                                    <div className="space-y-2">
-                                        <label className="text-sm text-gray-400 flex items-center gap-2">
-                                            <User className="h-4 w-4" /> Sender
-                                        </label>
-                                        <select
-                                            value={summarySender}
-                                            onChange={(e) => setSummarySender(e.target.value)}
-                                            className="w-full bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:border-[#4285F4]/50 focus:outline-none"
-                                        >
-                                            <option value="all">All Senders</option>
-                                            {uniqueSenders.map(s => (
-                                                <option key={s} value={s}>{formatSender(s).slice(0, 20)}...</option>
-                                            ))}
-                                        </select>
-                                    </div>
+                                    {!isFromHistory && (
+                                        <div className="space-y-2">
+                                            <label className="text-sm text-gray-400 flex items-center gap-2">
+                                                <User className="h-4 w-4" /> Sender Filter
+                                            </label>
+                                            <select
+                                                value={summarySender}
+                                                onChange={(e) => setSummarySender(e.target.value)}
+                                                className="w-full bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:border-[#4285F4]/50 focus:outline-none"
+                                            >
+                                                <option value="all">All Senders</option>
+                                                {uniqueSenders.map((s: any) => (
+                                                    <option key={s} value={s}>{formatSender(s).slice(0, 20)}...</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    )}
 
                                     <button
                                         onClick={handleSummarize}
@@ -257,6 +344,11 @@ export default function SummarizerPage() {
                                                 <RefreshCw className="animate-spin h-4 w-4" />
                                                 Generating...
                                             </>
+                                        ) : isFromHistory ? (
+                                            <>
+                                                <RefreshCw className="h-4 w-4" />
+                                                Regenerate
+                                            </>
                                         ) : (
                                             <>
                                                 <Sparkles className="h-4 w-4" />
@@ -264,6 +356,13 @@ export default function SummarizerPage() {
                                             </>
                                         )}
                                     </button>
+
+                                    {isFromHistory && (
+                                        <div className="flex items-center gap-2 px-4 py-3 bg-blue-500/10 border border-blue-500/20 rounded-xl mt-4">
+                                            <Check className="h-4 w-4 text-blue-400" />
+                                            <span className="text-[10px] font-bold text-blue-400 uppercase tracking-widest leading-none">Viewing from history</span>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         </div>
@@ -271,30 +370,74 @@ export default function SummarizerPage() {
                         {/* Results */}
                         <div className="lg:col-span-2">
                             {generatedSummary ? (
-                                <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl p-8 animate-fade-in-up">
-                                    <div className="flex items-center justify-between mb-6 border-b border-white/10 pb-4">
-                                        <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                                            <Sparkles className="h-5 w-5 text-[#4285F4]" />
-                                            AI Summary
-                                        </h3>
-                                        <span className="text-xs bg-white/10 px-2 py-1 rounded text-gray-400">
-                                            {new Date().toLocaleTimeString()}
-                                        </span>
-                                    </div>
-                                    <div className="prose prose-invert max-w-none">
-                                        <div className="whitespace-pre-wrap text-gray-300 leading-relaxed text-sm">
-                                            {generatedSummary}
+                                <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl p-8 shadow-2xl shadow-blue-500/5 animate-fade-in relative overflow-hidden group">
+                                    {/* Accent line */}
+                                    <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-transparent via-[#4285F4] to-transparent opacity-30"></div>
+
+                                    <div className="flex items-center justify-between mb-8 border-b border-white/5 pb-6">
+                                        <div className="flex items-center gap-3">
+                                            <div className="h-10 w-10 rounded-xl bg-[#4285F4]/20 flex items-center justify-center border border-[#4285F4]/30">
+                                                <Sparkles className="h-5 w-5 text-[#4285F4]" />
+                                            </div>
+                                            <div>
+                                                <h3 className="text-xl font-bold text-white tracking-tight">AI Insights</h3>
+                                                <p className="text-[10px] text-gray-500 mt-0.5 tracking-widest uppercase font-bold">
+                                                    {isFromHistory ? 'Historical Archive' : 'Real-time Generation'}
+                                                </p>
+                                            </div>
                                         </div>
+                                        <div className="flex items-center gap-3">
+                                            <button
+                                                onClick={handleSendToWhatsApp}
+                                                disabled={sending}
+                                                className={`flex items-center gap-2 px-4 py-2 border rounded-xl text-xs font-semibold tracking-wide transition-all group/send ${sendSuccess
+                                                    ? 'bg-green-500/10 border-green-500/30 text-green-400'
+                                                    : 'bg-white/5 hover:bg-[#25D366]/10 border-white/10 hover:border-[#25D366]/30 text-gray-400 hover:text-[#25D366]'
+                                                    }`}
+                                            >
+                                                {sending ? (
+                                                    <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                                                ) : sendSuccess ? (
+                                                    <><Check className="h-3.5 w-3.5" /> SENT TO WA</>
+                                                ) : (
+                                                    <><MessageSquare className="h-3.5 w-3.5" /> SEND TO ME</>
+                                                )}
+                                            </button>
+                                            <button
+                                                onClick={handleCopy}
+                                                className="flex items-center gap-2 px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-xs font-semibold tracking-wide transition-all group/copy"
+                                            >
+                                                {copied ? (
+                                                    <><Check className="h-3.5 w-3.5 text-green-400" /> COPIED</>
+                                                ) : (
+                                                    <><Copy className="h-3.5 w-3.5 text-gray-400 group-hover/copy:text-white" /> COPY REPORT</>
+                                                )}
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <div className="prose prose-invert prose-sm md:prose-base max-w-none prose-headings:text-white prose-headings:font-bold prose-h2:text-blue-400 prose-h2:border-b prose-h2:border-white/5 prose-h2:pb-2 prose-h2:mt-8 prose-h3:text-green-400 prose-h3:mt-6 prose-strong:text-white prose-ul:list-disc prose-li:my-1 prose-p:text-gray-300 prose-p:leading-relaxed">
+                                        <ReactMarkdown>
+                                            {generatedSummary}
+                                        </ReactMarkdown>
+                                    </div>
+
+                                    <div className="mt-12 pt-6 border-t border-white/5 flex items-center justify-between text-[10px] text-gray-500 uppercase tracking-widest font-semibold">
+                                        <div className="flex items-center gap-2">
+                                            <Sparkles className="h-3 w-3 text-[#4285F4]" />
+                                            <span>AI Processor Enabled</span>
+                                        </div>
+                                        <span>Summary for {summaryDate}</span>
                                     </div>
                                 </div>
                             ) : (
                                 <div className="h-[400px] flex flex-col items-center justify-center text-center border-2 border-white/5 border-dashed rounded-2xl p-8">
                                     <div className="h-16 w-16 bg-white/5 rounded-full flex items-center justify-center mb-4">
-                                        <Sparkles className="h-8 w-8 text-gray-600" />
+                                        <Clock className="h-8 w-8 text-gray-600" />
                                     </div>
-                                    <h3 className="text-lg font-medium text-gray-300">Ready to Analyze</h3>
+                                    <h3 className="text-lg font-medium text-gray-300">No Historical Archive</h3>
                                     <p className="text-gray-500 mt-2 max-w-sm">
-                                        Select your filters on the left and click &quot;Generate Summary&quot; to get AI-powered insights from your chats.
+                                        We couldn&apos;t find a saved report for this date. Click &quot;Generate Summary&quot; to create a new one.
                                     </p>
                                 </div>
                             )}

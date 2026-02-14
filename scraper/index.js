@@ -1,12 +1,12 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const { handleMessage } = require('./handlers');
-const { updateSystemStatus, checkAndSendDailySummary, checkLogoutCommand } = require('./store');
+const { updateSystemStatus, checkAndSendDailySummary, checkLogoutCommand, checkPendingCommands, syncGroups } = require('./store');
 
 const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
-        headless: true,
+        headless: 'new', // Use the modern headless mode
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
@@ -15,13 +15,14 @@ const client = new Client({
             '--no-first-run',
             '--no-zygote',
             '--disable-extensions',
-            '--disable-gpu'
+            '--disable-gpu',
+            '--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
         ],
     },
-    // Using a remote cache to prevent "detached Frame" errors with latest WA Web
+    // Locking to a very recent stable version to prevent "detached Frame" and "link failure"
     webVersionCache: {
         type: 'remote',
-        remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
+        remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1012170065-alpha.html',
     }
 });
 
@@ -31,9 +32,13 @@ client.on('qr', (qr) => {
     updateSystemStatus('QR_READY', qr);
 });
 
-client.on('ready', () => {
+client.on('ready', async () => {
     console.log('Client is ready!');
+    console.log(`👋 Logged in as: ${client.info.pushname} (${client.info.wid._serialized})`);
     updateSystemStatus('READY');
+
+    // Initial group sync
+    await syncGroups(client);
 });
 
 client.on('authenticated', () => {
@@ -56,7 +61,7 @@ client.on('disconnected', (reason) => {
 
 client.on('message_create', handleMessage);
 
-console.log('Initializing client...');
+console.log(`🚀 Initializing Scraper V2.2 (PID: ${process.pid}) (Stability Fix Applied)...`);
 updateSystemStatus('INIT');
 client.initialize();
 
@@ -85,13 +90,29 @@ setInterval(async () => {
     }
 }, 30000); // Check every 30 seconds
 
+// Periodic Group Sync (Every 6 hours)
+setInterval(async () => {
+    if (client.info && client.info.wid) {
+        console.log('🔄 Periodic group sync starting...');
+        await syncGroups(client);
+    }
+}, 6 * 60 * 60 * 1000);
+
 // SCHEDULER (Check every minute)
 setInterval(async () => {
     try {
         await checkLogoutCommand(client); // Check for logout frequently
+        await checkPendingCommands(client); // Check for async commands from dashboard
 
         if (client.info && client.info.wid) {
             await checkAndSendDailySummary(client);
+        } else {
+            // Rate limit "not connected" logs to once per minute to avoid spam
+            const now = Date.now();
+            if (!global.lastNotConnectedLog || now - global.lastNotConnectedLog > 60000) {
+                console.log('⏳ Scheduler: Client not ready/connected yet. Skipping summary check.');
+                global.lastNotConnectedLog = now;
+            }
         }
     } catch (error) {
         console.error('⏰ Scheduler Error:', error);
