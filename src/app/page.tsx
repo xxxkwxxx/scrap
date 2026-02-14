@@ -343,12 +343,12 @@ export default function Dashboard() {
                                                                     {cleanContent}
                                                                 </p>
                                                             ) : (
-                                                                <span className="text-gray-500 italic text-sm">
-                                                                    {imageMatch ? "Image attached" :
-                                                                        videoMatch ? "Video attached" :
-                                                                            audioMatch ? "Audio attached" :
-                                                                                msg.content?.includes('[STICKER]') ? "Sticker" :
-                                                                                    msg.content?.includes('[CALL LOG]') ? "Call Log" :
+                                                                <span className="text-gray-400 italic text-sm">
+                                                                    {imageMatch ? "📸 Image attached" :
+                                                                        videoMatch ? "🎥 Video attached" :
+                                                                            audioMatch ? "🎵 Audio attached" :
+                                                                                msg.content?.includes('[STICKER]') ? "✨ Sticker" :
+                                                                                    msg.content?.includes('[CALL LOG]') ? "📞 Call Log" :
                                                                                         "Empty message"}
                                                                 </span>
                                                             )}

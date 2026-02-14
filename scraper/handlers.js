@@ -1,14 +1,13 @@
 const { saveMessage, supabase, uploadMedia } = require('./store');
 
 async function handleMessage(message) {
-    // 1. No longer skipping self-sent messages
-    // This allows recording the full conversation context.
-    const isSelf = message.fromMe;
-    if (isSelf) {
-        console.log(`[${new Date().toLocaleTimeString()}] Processing self-sent message (${message.id._serialized})`);
+    // 0. STRICT VALIDATION: Ignore messages without ID or empty ghost events.
+    if (!message.id?._serialized) {
+        return;
     }
 
     try {
+        // 1. Resolve basic info
         const chat = await message.getChat();
 
         // Log own ID for debugging session identity
